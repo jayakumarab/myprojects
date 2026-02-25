@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: enterprise-app
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: enterprise-app
+data:
+  POSTGRES_DB: webapp
+  POSTGRES_USER: postgres
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secrets
+  namespace: enterprise-app
+type: Opaque
+data:
+  # Base64 encoded values for production (e.g., 'postgrespassword' -> 'cG9zdGdyZXNwYXNzd29yZA==')
+  # Also SECRET_KEY for JWT
+  POSTGRES_PASSWORD: cG9zdGdyZXNwYXNzd29yZA== 
+  SECRET_KEY: eW91ci1wcm9kdWN0aW9uLXNlY3JldC1rZXktaGVyZS1jaGFuZ2UtbWU=

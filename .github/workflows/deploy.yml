@@ -1,0 +1,83 @@
+name: CI/CD Pipeline to GKE
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  PROJECT_ID: ${{ secrets.GKE_PROJECT }}
+  GKE_CLUSTER: enterprise-cluster
+  GKE_ZONE: us-central1-c
+  REGISTRY_HOSTNAME: gcr.io
+  BACKEND_IMAGE: backend
+  FRONTEND_IMAGE: frontend
+
+jobs:
+  setup-build-publish-deploy:
+    name: Setup, Build, Publish, and Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Setup Google Cloud CLI
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        version: '416.0.0'
+        project_id: ${{ secrets.GKE_PROJECT }}
+        credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+
+    - name: Configure Docker to use gcloud
+      run: |-
+        gcloud auth configure-docker $REGISTRY_HOSTNAME
+
+    - name: Ensure GKE Cluster Credentials
+      run: |-
+        gcloud container clusters get-credentials "$GKE_CLUSTER" --zone "$GKE_ZONE"
+
+    # Backend Build & Push
+    - name: Build and Push Backend Image
+      run: |-
+        docker build -t "$REGISTRY_HOSTNAME"/"$PROJECT_ID"/"$BACKEND_IMAGE":${{ github.sha }} \
+          -t "$REGISTRY_HOSTNAME"/"$PROJECT_ID"/"$BACKEND_IMAGE":latest \
+          ./backend
+        docker push "$REGISTRY_HOSTNAME"/"$PROJECT_ID"/"$BACKEND_IMAGE":${{ github.sha }}
+        docker push "$REGISTRY_HOSTNAME"/"$PROJECT_ID"/"$BACKEND_IMAGE":latest
+
+    # Frontend Build & Push
+    - name: Build and Push Frontend Image
+      run: |-
+        docker build -t "$REGISTRY_HOSTNAME"/"$PROJECT_ID"/"$FRONTEND_IMAGE":${{ github.sha }} \
+          -t "$REGISTRY_HOSTNAME"/"$PROJECT_ID"/"$FRONTEND_IMAGE":latest \
+          ./frontend
+        docker push "$REGISTRY_HOSTNAME"/"$PROJECT_ID"/"$FRONTEND_IMAGE":${{ github.sha }}
+        docker push "$REGISTRY_HOSTNAME"/"$PROJECT_ID"/"$FRONTEND_IMAGE":latest
+
+    # Deploy to GKE
+    - name: Setup Kustomize
+      run: |-
+        curl -sfLo kustomize https://github.com/kubernetes-sigs/kustomize/releases/download/v3.1.0/kustomize_3.1.0_linux_amd64
+        chmod u+x ./kustomize
+
+    - name: Deploy YAMLs to GKE
+      run: |-
+        # Apply the manifests
+        kubectl apply -f ./k8s/01-namespace-config.yaml
+        kubectl apply -f ./k8s/02-postgres-statefulset.yaml
+        kubectl apply -f ./k8s/03-backend-deployment.yaml
+        kubectl apply -f ./k8s/04-frontend-deployment.yaml
+        kubectl apply -f ./k8s/05-hpa.yaml
+        kubectl apply -f ./k8s/06-ingress.yaml
+        
+        # Trigger rolling updates
+        kubectl set image deployment/backend backend="$REGISTRY_HOSTNAME"/"$PROJECT_ID"/"$BACKEND_IMAGE":${{ github.sha }} -n enterprise-app
+        kubectl set image deployment/frontend frontend="$REGISTRY_HOSTNAME"/"$PROJECT_ID"/"$FRONTEND_IMAGE":${{ github.sha }} -n enterprise-app
+        
+        # Verify deployment rollouts
+        kubectl rollout status deployment/backend -n enterprise-app
+        kubectl rollout status deployment/frontend -n enterprise-app
